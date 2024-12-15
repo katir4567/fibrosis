@@ -1,58 +1,41 @@
 import os
-import shutil
-import random
-import matplotlib.pyplot as plt
+import torch
+from torch.utils.data import DataLoader
+import pandas as pd
 
-# Folder paths
-main_folder = "fibrosis/Fibrosis"    # Main folder containing all images
-train_folder = "fibrosis/Train"
-validation_folder = "fibrosis/Validation"
-test_folder = "fibrosis/Test"
+from dataset import lung_Xray_dataset
+from model import MyModel
+from trainer import train_model, evaluate_model
+from args import get_args
+from data_prep import plot_class_distribution, visualize_samples
 
-# Define split ratios
-train_ratio = 0.68         # 80% of the data will go to training
-validation_ratio = 0.12   # 10% will go to validation
-test_ratio = 0.2          # 20% will go to testing
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Get all images from the main folder
-all_images = os.listdir(main_folder)
-random.shuffle(all_images)  # Shuffle to randomize the order
+def main():
+    args = get_args()
 
-# Calculate the split sizes
-train_size = int(train_ratio * len(all_images))
-validation_size = int(validation_ratio * len(all_images))
+    # Prepare metadata
+    metadata = pd.read_csv("dataset.csv")
+    plot_class_distribution(metadata)
+    visualize_samples(metadata, "data/images")
 
-# Split the data
-train_images = all_images[:train_size]
-validation_images = all_images[train_size:train_size + validation_size]
-test_images = all_images[train_size + validation_size:]
+    # 5-fold Cross-Validation
+    for fold in range(5):
+        print(f"Fold {fold+1}/5")
 
-# Function to copy images to the specified folder
-def copy_images(image_list, destination_folder):
-    if not os.path.exists(destination_folder):
-        os.makedirs(destination_folder)
-    for image in image_list:
-        src = os.path.join(main_folder, image)
-        dest = os.path.join(destination_folder, image)
-        shutil.copy(src, dest)
+        train_set = pd.read_csv(f"data/CSVs/fold_{fold}_train.csv")
+        val_set = pd.read_csv(f"data/CSVs/fold_{fold}_val.csv")
 
-# Copy images into Train, Validation, and Test folders
-copy_images(train_images, train_folder)
-copy_images(validation_images, validation_folder)
-copy_images(test_images, test_folder)
+        train_dataset = lung_Xray_dataset(train_set, img_dir="data/images")
+        val_dataset = lung_Xray_dataset(val_set, img_dir="data/images")
 
-# Visualize the number of images in each set
-def visualize_data_distribution():
-    set_folders = [train_folder, validation_folder, test_folder]
-    set_names = ["Train", "Validation", "Test"]
-    counts = [len(os.listdir(folder)) for folder in set_folders]
+        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
+        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8)
 
-    # Plot the results
-    plt.bar(set_names, counts, color=['blue', 'orange', 'green'])
-    plt.xlabel("Dataset Type")
-    plt.ylabel("Number of Images")
-    plt.title("Number of Images in Train, Validation, and Test Sets")
-    plt.show()
+        model = MyModel(backbone=args.backbone).to(device)
 
-# Run the visualization
-visualize_data_distribution()
+        # Train and track losses
+        train_losses, val_losses = train_model(model, train_loader, val_loader, args)
+
+        # Evaluate the model
+        evaluate_model(model, val_loader)
